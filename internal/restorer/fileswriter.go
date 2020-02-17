@@ -5,8 +5,10 @@ import (
 	"runtime"
 	"sync"
 
+	"github.com/restic/chunker"
 	"github.com/restic/restic/internal/debug"
 	"github.com/restic/restic/internal/errors"
+	"github.com/restic/restic/internal/restic"
 )
 
 // Writes blobs to output files. Each file is written sequentially,
@@ -29,16 +31,10 @@ func newFilesWriter(cacheCap int) *filesWriter {
 	}
 }
 
-func sparseFilesSupport() bool {
-	switch runtime.GOOS {
-	case "darwin":
-		return true
-	case "windows":
-		return false
-	default:
-		return true
-	}
-}
+// sparseFilesSupport returns true if the operating system supports writing
+// zeros by *os.File.Truncate. That does not mean that the filesystem to which
+// we're restoring supports them, so we must always retry with a regular Write.
+func sparseFilesSupport() bool { return runtime.GOOS != "windows" }
 
 func (w *filesWriter) acquireWriter(path string) (*os.File, error) {
 	w.lock.Lock()
@@ -104,24 +100,52 @@ func (w *filesWriter) writeToFile(path string, blob []byte) error {
 	return nil
 }
 
-func (w *filesWriter) extendFile(path string, bytes int64) error {
+var (
+	errRetryWriteZeros = errors.New("retry writeZeros")
+
+	zeros   [chunker.MinSize]byte // a block of zeros
+	zerosID restic.ID             // pre-computed id of zeros
+)
+
+func init() {
+	if sparseFilesSupport() {
+		zerosID = restic.Hash(zeros[:])
+	}
+}
+
+// writeZeros writes a zeros to path.
+func (w *filesWriter) writeZeros(path string) error {
 	wr, err := w.acquireWriter(path)
 	if err != nil {
 		return err
 	}
+	defer w.cacheOrCloseWriter(path, wr)
+
+	err = w.extendFile(wr)
+	if err == errRetryWriteZeros {
+		_, err = wr.Write(zeros[:])
+	}
+	return err
+}
+
+// extendFile writes a zeros to path using Truncate.
+func (w *filesWriter) extendFile(wr *os.File) error {
 	info, err := wr.Stat()
 	if err != nil {
 		return err
 	}
-	err = wr.Truncate(info.Size() + bytes)
+	err = wr.Truncate(info.Size() + int64(len(zeros)))
 	if err == nil {
 		_, err = wr.Seek(0, os.SEEK_END)
-	}
-	w.cacheOrCloseWriter(path, wr)
-	if err != nil {
 		return err
 	}
-	return nil
+
+	pos, err := wr.Seek(0, os.SEEK_CUR)
+	if err == nil && pos == info.Size() {
+		// File size didn't change, so we can safely retry.
+		return errRetryWriteZeros
+	}
+	return err
 }
 
 func (w *filesWriter) close(path string) {

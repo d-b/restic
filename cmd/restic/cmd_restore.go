@@ -38,7 +38,6 @@ type RestoreOptions struct {
 	Paths              []string
 	Tags               restic.TagLists
 	Verify             bool
-	SparseFiles        bool
 }
 
 var restoreOptions RestoreOptions
@@ -57,7 +56,6 @@ func init() {
 	flags.Var(&restoreOptions.Tags, "tag", "only consider snapshots which include this `taglist` for snapshot ID \"latest\"")
 	flags.StringArrayVar(&restoreOptions.Paths, "path", nil, "only consider snapshots which include this (absolute) `path` for snapshot ID \"latest\"")
 	flags.BoolVar(&restoreOptions.Verify, "verify", false, "verify restored files content")
-	flags.BoolVar(&restoreOptions.SparseFiles, "sparse", false, "restore files as sparse when possible")
 }
 
 func runRestore(opts RestoreOptions, gopts GlobalOptions, args []string) error {
@@ -124,7 +122,7 @@ func runRestore(opts RestoreOptions, gopts GlobalOptions, args []string) error {
 		}
 	}
 
-	res, err := restorer.NewRestorer(repo, id, opts.SparseFiles)
+	res, err := restorer.NewRestorer(repo, id)
 	if err != nil {
 		Exitf(2, "creating restorer failed: %v\n", err)
 	}

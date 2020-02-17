@@ -15,9 +15,8 @@ import (
 
 // Restorer is used to restore a snapshot to a directory.
 type Restorer struct {
-	repo        restic.Repository
-	sn          *restic.Snapshot
-	sparseFiles bool
+	repo restic.Repository
+	sn   *restic.Snapshot
 
 	Error        func(location string, err error) error
 	SelectFilter func(item string, dstpath string, node *restic.Node) (selectedForRestore bool, childMayBeSelected bool)
@@ -26,10 +25,9 @@ type Restorer struct {
 var restorerAbortOnAllErrors = func(location string, err error) error { return err }
 
 // NewRestorer creates a restorer preloaded with the content from the snapshot id.
-func NewRestorer(repo restic.Repository, id restic.ID, sparseFiles bool) (*Restorer, error) {
+func NewRestorer(repo restic.Repository, id restic.ID) (*Restorer, error) {
 	r := &Restorer{
 		repo:         repo,
-		sparseFiles:  sparseFiles,
 		Error:        restorerAbortOnAllErrors,
 		SelectFilter: func(string, string, *restic.Node) (bool, bool) { return true, true },
 	}
@@ -208,7 +206,7 @@ func (res *Restorer) RestoreTo(ctx context.Context, dst string) error {
 
 	idx := restic.NewHardlinkIndex()
 
-	filerestorer := newFileRestorer(dst, res.repo.Backend().Load, res.repo.Key(), filePackTraverser{lookup: res.repo.Index().Lookup}, res.sparseFiles)
+	filerestorer := newFileRestorer(dst, res.repo.Backend().Load, res.repo.Key(), filePackTraverser{lookup: res.repo.Index().Lookup})
 
 	// first tree pass: create directories and collect all files to restore
 	err = res.traverseTree(ctx, dst, string(filepath.Separator), *res.sn.Tree, treeVisitor{

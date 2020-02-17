@@ -5,7 +5,6 @@ import (
 	"io"
 	"path/filepath"
 
-	"github.com/restic/chunker"
 	"github.com/restic/restic/internal/crypto"
 	"github.com/restic/restic/internal/debug"
 	"github.com/restic/restic/internal/errors"
@@ -67,13 +66,9 @@ type fileRestorer struct {
 
 	dst   string
 	files []*fileInfo
-
-	zerosID     restic.ID // computed "zeros" id
-	zerosSize   int64     // "zeros" chunk size
-	sparseFiles bool      // sparse files supported
 }
 
-func newFileRestorer(dst string, packLoader func(ctx context.Context, h restic.Handle, length int, offset int64, fn func(rd io.Reader) error) error, key *crypto.Key, idx filePackTraverser, sparseFiles bool) *fileRestorer {
+func newFileRestorer(dst string, packLoader func(ctx context.Context, h restic.Handle, length int, offset int64, fn func(rd io.Reader) error) error, key *crypto.Key, idx filePackTraverser) *fileRestorer {
 	return &fileRestorer{
 		packLoader:  packLoader,
 		key:         key,
@@ -81,9 +76,6 @@ func newFileRestorer(dst string, packLoader func(ctx context.Context, h restic.H
 		filesWriter: newFilesWriter(filesWriterCacheCap),
 		packCache:   newPackCache(packCacheCapacity),
 		dst:         dst,
-		zerosID:     restic.Hash(make([]byte, chunker.MinSize)),
-		zerosSize:   chunker.MinSize,
-		sparseFiles: sparseFilesSupport() && sparseFiles,
 	}
 }
 
@@ -287,19 +279,23 @@ func (r *fileRestorer) processPack(ctx context.Context, request processingInfo, 
 		target := r.targetPath(file.location)
 		r.idx.forEachFilePack(file, func(packIdx int, packID restic.ID, packBlobs []restic.Blob) bool {
 			for _, blob := range packBlobs {
-				if blob.ID == r.zerosID && r.sparseFiles {
-					debug.Log("Seeking past zeros blob %s (%d bytes) from pack %s in %s", blob.ID.Str(), blob.Length, packID.Str(), file.location)
-					r.filesWriter.extendFile(target, r.zerosSize)
+				debug.Log("Writing blob %s (%d bytes) from pack %s to %s", blob.ID.Str(), blob.Length, packID.Str(), file.location)
+
+				var (
+					buf []byte
+					err error
+				)
+				if sparseFilesSupport() && blob.ID == zerosID {
+					err = r.filesWriter.writeZeros(target)
 				} else {
-					debug.Log("Writing blob %s (%d bytes) from pack %s to %s", blob.ID.Str(), blob.Length, packID.Str(), file.location)
-					buf, err := r.loadBlob(rd, blob)
+					buf, err = r.loadBlob(rd, blob)
 					if err == nil {
 						err = r.filesWriter.writeToFile(target, buf)
 					}
-					if err != nil {
-						request.files[file] = err
-						break // could not restore the file
-					}
+				}
+				if err != nil {
+					request.files[file] = err
+					break // could not restore the file
 				}
 			}
 			return false
